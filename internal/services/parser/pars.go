@@ -1,16 +1,23 @@
 package parser
 
 import (
+	"bytes"
 	"context"
 	"database/sql"
 	"encoding/csv"
+	"encoding/json"
 	"errors"
+	"fmt"
 	"io"
 	"mime/multipart"
+	"net/http"
 	"sync"
+	"time"
+	"unicode"
 
 	"github.com/gin-gonic/gin"
 	"github.com/lunyashon/filterphone/internal/lib/auth"
+	"github.com/lunyashon/filterphone/internal/lib/curl"
 	"github.com/lunyashon/filterphone/internal/lib/structure"
 	"github.com/lunyashon/filterphone/internal/services/phsearch"
 	"golang.org/x/sync/errgroup"
@@ -92,9 +99,11 @@ func (csp *CSVParser) parseCsv(c *gin.Context) {
 	}
 
 	var (
-		numbers      = make(map[string]structure.Numbers)
-		errg1, ctxg1 = errgroup.WithContext(c.Request.Context())
-		mu           sync.Mutex
+		numbers       = make(map[string]structure.Numbers)
+		errg1, ctxg1  = errgroup.WithContext(c.Request.Context())
+		mu            sync.Mutex
+		dupl          = c.PostForm("use_duplicate")
+		numbersFailed = make(map[string]structure.Numbers)
 	)
 
 	errg1.SetLimit(20)
@@ -112,6 +121,22 @@ func (csp *CSVParser) parseCsv(c *gin.Context) {
 				}
 				return err
 			}
+			if dupl == "1" {
+				r, err := csp.checkDuplicateFromZarya(ctxg1, phone)
+				if err != nil {
+					csp.log.Error("failed to check duplicate from zarya", "error", err)
+					mu.Lock()
+					numbersFailed[phone] = *number
+					mu.Unlock()
+					return nil
+				}
+				if r {
+					mu.Lock()
+					numbersFailed[phone] = *number
+					mu.Unlock()
+					return nil
+				}
+			}
 			mu.Lock()
 			numbers[phone] = *number
 			mu.Unlock()
@@ -124,7 +149,7 @@ func (csp *CSVParser) parseCsv(c *gin.Context) {
 		return
 	}
 
-	c.JSON(structure.Status[codes.OK], gin.H{"phones": numbers})
+	c.JSON(structure.Status[codes.OK], gin.H{"phones": numbers, "failed": numbersFailed})
 }
 
 func (csp *CSVParser) parseFile(ctx context.Context, fh *multipart.FileHeader) (map[string]string, error) {
@@ -169,6 +194,17 @@ func (csp *CSVParser) parseFile(ctx context.Context, fh *multipart.FileHeader) (
 			continue
 		}
 
+		isPhone := true
+		for _, ch := range rec[0] {
+			if !unicode.IsDigit(ch) {
+				isPhone = false
+				break
+			}
+		}
+		if !isPhone {
+			continue
+		}
+
 		if _, ok := phones[rec[0]]; ok {
 			continue
 		}
@@ -196,4 +232,52 @@ func (csp *CSVParser) filterPhones(
 		}
 	}
 	return phones, nil
+}
+
+type ZaryaCheckDuplicate struct {
+	Phone string `json:"phone"`
+}
+
+type ZaryaCheckDuplicateResponse struct {
+	Result bool `json:"result"`
+}
+
+func (csp *CSVParser) checkDuplicateFromZarya(ctx context.Context, phone string) (bool, error) {
+	client := http.Client{Timeout: 60 * time.Second}
+	request := ZaryaCheckDuplicate{Phone: phone}
+	param, err := json.Marshal(request)
+	if err != nil {
+		return false, err
+	}
+	const maxRetries = 3
+
+	var statusCode int
+	for i := 0; i <= maxRetries; i++ {
+		body, statusCode, err := curl.CurlWithContext(ctx, &client, csp.cfg.B24ZaryaUrl, "POST", bytes.NewReader(param), nil)
+		if err != nil {
+			if i < maxRetries && (errors.Is(err, context.Canceled) || errors.Is(err, context.DeadlineExceeded)) {
+				time.Sleep(time.Duration((i+1)*(i+1)) * time.Second)
+				continue
+			}
+			return false, err
+		}
+
+		if statusCode >= 500 && i < maxRetries {
+			time.Sleep(time.Duration((i+1)*(i+1)) * time.Second)
+			continue
+		}
+
+		var response ZaryaCheckDuplicateResponse
+		if err := json.Unmarshal(body, &response); err != nil {
+			return false, err
+		}
+
+		if statusCode != 200 {
+			return false, fmt.Errorf("failed to check duplicate from zarya: %d", statusCode)
+		}
+
+		return response.Result, nil
+	}
+
+	return false, fmt.Errorf("failed to check duplicate from zarya after retries: %d", statusCode)
 }

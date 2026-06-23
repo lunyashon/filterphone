@@ -11,8 +11,11 @@ import (
 )
 
 type Database struct {
-	Base    Base
-	Numbers NumbersProvider
+	Base     Base
+	Numbers  NumbersProvider
+	Retarget RetargetProvider
+	Links    LinkProvider
+	Template TemplateProvider
 }
 
 func GetInstance(logger *slog.Logger, cfg *structure.Config) (*Database, error) {
@@ -40,8 +43,11 @@ func GetInstance(logger *slog.Logger, cfg *structure.Config) (*Database, error) 
 	}
 
 	return &Database{
-		Base:    db,
-		Numbers: sdb,
+		Base:     db,
+		Numbers:  sdb,
+		Retarget: sdb,
+		Links:    sdb,
+		Template: sdb,
 	}, nil
 }
 

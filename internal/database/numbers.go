@@ -7,6 +7,23 @@ import (
 	"github.com/lunyashon/filterphone/internal/lib/structure"
 )
 
+var (
+	mapOperators = map[string]string{
+		"ООО \"Т2 Мобайл\"":             "ТЕЛЕ2",
+		"ООО \"Т2 МОБАЙЛ\"":             "ТЕЛЕ2",
+		"АО \"МТТ\"":                    "МТС",
+		"ПАО МГТС":                      "МТС",
+		"ПАО \"Мобильные ТелеСистемы\"": "МТС",
+		"ПАО \"МТС\"":                   "МТС",
+		"ООО \"Скартел\"":               "Мегафон",
+		"ООО \"СКАРТЕЛ\"":               "Мегафон",
+		"ПАО \"МегаФон\"":               "Мегафон",
+		"ПАО \"МЕГАФОН\"":               "Мегафон",
+		"ПАО \"ВЫМПЕЛКОМ\"":             "Билайн",
+		"ПАО \"Вымпел-Коммуникации\"":   "Билайн",
+	}
+)
+
 type NumbersProvider interface {
 	CreateNumbers(ctx context.Context, numbers structure.Numbers) error
 	GetNumbers(ctx context.Context, code int16, numbers int) (*structure.Numbers, error)
@@ -30,14 +47,19 @@ func (s *SDatabase) DeleteNumbers(ctx context.Context) error {
 
 func (s *SDatabase) CreateNumbers(ctx context.Context, numbers structure.Numbers) error {
 	var (
-		err error
+		err      error
+		operator sql.NullString
 	)
 
+	if operatorName, ok := mapOperators[numbers.Operator]; ok {
+		operator = sql.NullString{String: operatorName, Valid: true}
+	}
+
 	const q = `
-		INSERT INTO numbers_diapason (code, from_n, to_n, capacity, operator, region, territory, inn)
-		VALUES ($1, $2, $3, $4, $5, $6, $7, $8)
+		INSERT INTO numbers_diapason (code, from_n, to_n, capacity, operator, region, territory, inn, mobile_operator)
+		VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9)
 	`
-	_, err = s.db.ExecContext(ctx, q, numbers.Code, numbers.From, numbers.To, numbers.Capacity, numbers.Operator, numbers.Region, numbers.Territory, numbers.INN)
+	_, err = s.db.ExecContext(ctx, q, numbers.Code, numbers.From, numbers.To, numbers.Capacity, numbers.Operator, numbers.Region, numbers.Territory, numbers.INN, operator)
 	if err != nil {
 		return err
 	}

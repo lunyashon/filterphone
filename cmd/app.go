@@ -44,5 +44,6 @@ func getConfig() *structure.Config {
 		PassDb:      os.Getenv("PASS_DB"),
 		LogPath:     os.Getenv("LOG_PATH"),
 		TokenSecret: os.Getenv("TOKEN_SECRET"),
+		B24ZaryaUrl: os.Getenv("B24_ZARYA_URL"),
 	}
 }

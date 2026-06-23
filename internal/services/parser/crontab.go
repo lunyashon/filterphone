@@ -16,6 +16,11 @@ import (
 
 func (csp *CSVParser) Restore(c *gin.Context) {
 
+	if err := csp.DownloadOpendata(); err != nil {
+		c.JSON(structure.Status[codes.Internal], gin.H{"error": err.Error()})
+		return
+	}
+
 	go func() {
 
 		var (
